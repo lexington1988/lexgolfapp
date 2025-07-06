@@ -1,104 +1,111 @@
-let flashcards = [];
-let currentCardIndex = 0;
-let showingFront = true;
-let reviewing = false;
-const cardEl = document.getElementById("card");
-const cardText = document.getElementById("card-text");
-const ratingButtons = document.getElementById("rating-buttons");
+function deleteSelectedRound() {
+  const select = document.getElementById('saved-rounds');
+  const key = select.value;
+  if (!key) return alert("Please select a round to delete.");
 
-const CSV_URL = "https://yourusername.github.io/lilac-flashcards/Flashcards.csv"; // Change this!
+  if (confirm("Are you sure you want to delete this round?")) {
+    localStorage.removeItem(key);
+    updateRoundList();
+    select.value = '';
 
-function startReview() {
-  if (!reviewing) {
-    fetchCSV(CSV_URL).then((cards) => {
-      flashcards = loadProgress(cards);
-      reviewing = true;
-      document.getElementById("start-btn").classList.add("hidden");
-      cardEl.classList.remove("hidden");
-      ratingButtons.classList.remove("hidden");
-      showNextCard();
-    });
+    // Clear UI if the deleted round was currently loaded
+    const current = localStorage.getItem('currentRound');
+    if (current) {
+      const currentData = JSON.parse(current);
+      const deletedKey = `round-${currentData.courseName} - ${currentData.date}`;
+      if (deletedKey === key) {
+        clearUI();
+        localStorage.removeItem('currentRound');
+      }
+    }
+
+    alert("Round deleted.");
   }
 }
 
-function fetchCSV(url) {
-  return fetch(url)
-    .then((res) => res.text())
-    .then((text) => {
-      const rows = text.trim().split("\n").slice(1);
-      return rows.map((row) => {
-        const [front, back] = row.split(/,(.+)/); // Support comma in back
-        return {
-          front: front.trim(),
-          back: back.trim(),
-          ef: 2.5,
-          interval: 0,
-          repetitions: 0,
-          due: Date.now(),
-        };
-      });
-    });
+function clearUI() {
+  document.getElementById('course-select').value = '';
+  ['p1-name', 'p2-name', 'p3-name', 'p4-name'].forEach(id => document.getElementById(id).value = '');
+
+  // Reset scorecard column headers
+  const headers = document.querySelectorAll('#scorecard thead tr th');
+  headers[2].textContent = 'Player 1';
+  headers[3].textContent = 'Player 2';
+  headers[4].textContent = 'Player 3';
+  headers[5].textContent = 'Player 4';
+
+  // Do not clear clubs to retain persistent data
+  // clubInputs().forEach(i => i.value = ''); // remove if you want to retain
+
+  scoreInputs().forEach(i => i.value = '');
+  logInputs().forEach(i => {
+    if (i.tagName === 'SELECT') i.selectedIndex = 0;
+    else i.value = '';
+  });
+
+  updateTotals();
+  document.getElementById('course-select').focus();
 }
 
-function loadProgress(cards) {
-  const saved = JSON.parse(localStorage.getItem("flashcards-progress") || "{}");
-  return cards.map((card, i) => Object.assign(card, saved[i] || {}));
-}
-
-function saveProgress() {
-  const saveData = flashcards.reduce((acc, card, i) => {
-    acc[i] = {
-      ef: card.ef,
-      interval: card.interval,
-      repetitions: card.repetitions,
-      due: card.due,
-    };
-    return acc;
-  }, {});
-  localStorage.setItem("flashcards-progress", JSON.stringify(saveData));
-}
-
-function showNextCard() {
-  const now = Date.now();
-  const dueCards = flashcards.filter(card => card.due <= now);
-  if (dueCards.length === 0) {
-    cardText.textContent = "🎉 All cards reviewed for now!";
-    ratingButtons.classList.add("hidden");
+function saveCurrentRound() {
+  const round = collectData();
+  if (!round.courseName.trim()) {
+    alert("Please select a course before saving.");
     return;
   }
-  currentCardIndex = flashcards.indexOf(dueCards[0]);
-  showingFront = true;
-  cardText.textContent = flashcards[currentCardIndex].front;
-  cardEl.onclick = toggleCard;
+  const key = `${round.courseName} - ${round.date}`;
+  localStorage.setItem(`round-${key}`, JSON.stringify(round));
+  updateRoundList();
+  alert(`Saved round: ${key}`);
 }
 
-function toggleCard() {
-  showingFront = !showingFront;
-  const card = flashcards[currentCardIndex];
-  cardText.textContent = showingFront ? card.front : card.back;
-}
+function startNewRound() {
+  if (confirm("Start a new round? This will clear all current inputs.")) {
+    localStorage.removeItem('currentRound');
+    clearUI();
 
-function rateCard(quality) {
-  const card = flashcards[currentCardIndex];
-  const now = Date.now();
-
-  if (quality < 3) {
-    card.repetitions = 0;
-    card.interval = 1;
-  } else {
-    card.repetitions += 1;
-    if (card.repetitions === 1) {
-      card.interval = 1;
-    } else if (card.repetitions === 2) {
-      card.interval = 6;
-    } else {
-      card.interval = Math.round(card.interval * card.ef);
+    // 🔁 Re-populate club data from persistent storage
+    const savedClubs = localStorage.getItem('persistentClubData');
+    if (savedClubs) {
+      populateClubData(JSON.parse(savedClubs));
     }
-    card.ef += (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02));
-    if (card.ef < 1.3) card.ef = 1.3;
+
+    // ✅ Reset Shot Tracker:
+    resetShotTracker();
+  }
+}
+
+
+function updateRoundList() {
+  const select = document.getElementById('saved-rounds');
+  select.innerHTML = '<option value="">🔽 Load Saved Round</option>';
+  const keys = Object.keys(localStorage).filter(k => k.startsWith('round-')).sort();
+
+  keys.forEach(key => {
+    const data = JSON.parse(localStorage.getItem(key));
+    const player1Total = data.scorecardData?.reduce((sum, row) => sum + (parseInt(row[1]) || 0), 0) || 0;
+    const player1Name = data.playerNames?.[0] || 'Player 1';
+    const label = `${player1Total} - ${player1Name} - ${data.courseName} - ${data.date}`;
+
+    const option = document.createElement('option');
+    option.value = key;
+    option.textContent = label; // safer than innerHTML for plain text
+    select.appendChild(option);
+  });
+}
+function resetShotTracker() {
+  // ✅ Use the dedicated canvases container
+  const canvasesContainer = document.getElementById('shot-tracker-canvases');
+  if (canvasesContainer) {
+    canvasesContainer.innerHTML = ''; // Clear only the canvases
   }
 
-  card.due = now + card.interval * 24 * 60 * 60 * 1000;
-  saveProgress();
-  showNextCard();
+  holeCanvases.length = 0;
+
+  // ✅ Recreate canvases for all 18 holes
+  for (let i = 1; i <= 18; i++) {
+    createShotCanvas(i);
+  }
 }
+
+
